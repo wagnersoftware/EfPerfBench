@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 namespace EfPerfBench.Benchmarks
 {
     [MemoryDiagnoser]
-    [Orderer(SummaryOrderPolicy.FastestToSlowest)]
+    [Orderer(SummaryOrderPolicy.Method)]
     [RankColumn]
     public class EfBenchmarks
     {
@@ -29,13 +29,9 @@ namespace EfPerfBench.Benchmarks
         public async Task Setup()
         {
             using var db = new AppDbContext(_options);
-
-            if(db.Customers.Any())
-                return;
-
             await db.Database.EnsureDeletedAsync();
             await db.Database.EnsureCreatedAsync();
-            await SeedData.PopulateAsync(db, 50_000);
+            await SeedData.PopulateAsync(db, 5000);
         }
 
         [Benchmark]
@@ -47,7 +43,8 @@ namespace EfPerfBench.Benchmarks
             var data = await db.Customers
                 .TagWith(methodName)
                 .AsNoTracking()
-                .Take(_customerCount)
+                .Include(c => c.Orders)
+                .ThenInclude(o => o.Products)
                 .ToListAsync();
         }
 
@@ -59,7 +56,8 @@ namespace EfPerfBench.Benchmarks
             using var db = new AppDbContext(_options);
             var data = await db.Customers
                 .TagWith(methodName)
-                .Take(_customerCount)
+                .Include(c => c.Orders)
+                .ThenInclude(o => o.Products)
                 .ToListAsync();
         }
 
@@ -71,11 +69,11 @@ namespace EfPerfBench.Benchmarks
             using var db = new AppDbContext(_options);
             var customersCount = db.Customers
                 .TagWith(methodName)
-                .ToList()
-                .Count();
+                .ToList() // Materialize as IEnumerable
+                .Count(); //Executed in RAM
         }
 
-        [Benchmark]
+        [Benchmark(Baseline = true)]
         public async Task Count_Customers_With_IQueryable()
         {
             var methodName = GetMethodName();
@@ -83,7 +81,7 @@ namespace EfPerfBench.Benchmarks
             using var db = new AppDbContext(_options);
             var customersCount = await db.Customers
                 .TagWith(methodName)
-                .CountAsync();
+                .CountAsync(); //Executed in Database
         }
 
         [Benchmark]
@@ -94,10 +92,11 @@ namespace EfPerfBench.Benchmarks
             using var db = new AppDbContext(_options);
             var customerExists = db.Customers
                 .TagWith(methodName)
-                .ToList().Any(x => x.Id == 25000);
+                .ToList()
+                .Any(x => x.Id == 25000); //Executed in RAM
         }
 
-        [Benchmark]
+        [Benchmark(Baseline = true)]
         public async Task Customer_Exists_With_IQueryable()
         {
             var methodName = GetMethodName();
@@ -105,7 +104,7 @@ namespace EfPerfBench.Benchmarks
             using var db = new AppDbContext(_options);
             var customerExists = await db.Customers
                 .TagWith(methodName)
-                .AnyAsync(x => x.Id == 25000);
+                .AnyAsync(x => x.Id == 25000); //Executed in Database
         }
 
         [Benchmark]
@@ -131,7 +130,7 @@ namespace EfPerfBench.Benchmarks
 
             using var db = new AppDbContext(_options);
             var customers = await db.Customers
-                .ExecuteUpdateAsync( x => x.
+                .ExecuteUpdateAsync(x => x.
                     SetProperty(c => c.Name, "Updated Name"));
         }
 
@@ -148,38 +147,103 @@ namespace EfPerfBench.Benchmarks
         }
 
         [Benchmark]
+        public async Task Customer_Delete()
+        {
+            using var db = new AppDbContext(_options);
+            var customers = await db.Customers.TagWith(GetMethodName())
+                .ToListAsync();
+
+            var customerToRemove = customers.FirstOrDefault(c => c.Id == 25001);
+            if (customerToRemove != null)
+            {
+                db.Customers.Remove(customerToRemove);
+            }
+
+            await db.SaveChangesAsync();
+        }
+
+        [Benchmark]
+        public async Task Pagination_Local()
+        {
+            using var db = new AppDbContext(_options);
+            var page = 5;
+            var pageSize = 20;
+
+            IQueryable<Customer> customerQuery = db.Customers
+                .AsNoTracking()
+                .TagWith(GetMethodName())
+                .Include(c => c.Orders);
+
+            var customers = await customerQuery.ToListAsync();
+            int count = customers.Count;
+
+            List<OrderWithCustomerDto> result = customers
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .SelectMany(c => c.Orders, (c, o) => new OrderWithCustomerDto
+                {
+                    Id = o.Id,
+                    OrderDate = o.OrderDate,
+                    CustomerId = c.Id,
+                    CustomerName = c.Name
+                })
+                .ToList();
+        }
+
+        [Benchmark]
+        public async Task Pagination_Database()
+        {
+            using var db = new AppDbContext(_options);
+            var page = 5;
+            var pageSize = 20;
+
+            IQueryable<OrderWithCustomerDto> customerQuery = db.Customers
+                .TagWith(GetMethodName())
+                .SelectMany(c => c.Orders, (c, o) => new OrderWithCustomerDto
+                {
+                    Id = o.Id,
+                    OrderDate = o.OrderDate,
+                    CustomerId = c.Id,
+                    CustomerName = c.Name
+                });
+
+            int count = await customerQuery.CountAsync();
+
+            customerQuery = customerQuery
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize);
+
+            var result = await customerQuery.ToListAsync();
+        }
+
+        [Benchmark]
         public async Task Ef_EagerLoading_ExplicitIncludes()
         {
             var methodName = GetMethodName();
 
             using var db = new AppDbContext(_options);
-            var data = await db.Customers
+            var data = await db.Orders
                 .TagWith(methodName)
-                .Include(c => c.Orders)
-                .ThenInclude(o => o.Products)
-                .AsNoTracking()
-                .Take(_customerCount)
+                .Include(o => o.Customer)
+                .Where(o => o.CustomerId == 1000)
                 .ToListAsync();
         }
 
-        [Benchmark]
+        [Benchmark(Baseline =true)]
         public async Task Ef_EagerLoading_ImplicitIncludes()
         {
             using var db = new AppDbContext(_options);
-            var data = await db.Customers
+            var data = await db.Orders
                 .TagWith(GetMethodName())
-                .AsNoTracking()
-                .Select(c => new
+                .Where(o => o.CustomerId == 1000)
+                .Select(o => new
                 {
-                    Customer = c,
-                    Orders = c.Orders.Select(o => new
-                    {
-                        Order = o,
-                        Products = o.Products.Select(p => p)
-                    }).ToList()
-                })
-                .Take(_customerCount)
-                .ToListAsync();
+                    CustomerName = o.Customer!.Name,
+                    o.Id,
+                    o.CustomerId,
+                    o.OrderDate,
+
+                }).ToListAsync();
         }
     }
 }

@@ -18,6 +18,20 @@ namespace EfPerfBench.Data
                 batch.Add(new Customer
                 {
                     Name = $"Customer {i}",
+                    Age = rnd.Next(18, 80),
+                    Balance = rnd.Next(0, 10000),
+                    Status = (i % 2 == 0) ? "Active" : "Inactive",
+                    Phone = $"555-010{i % 10}",
+                    Email = $"test@customer{i}.com",
+                    City = $"City {i % 100}",
+                    Country = $"Country {i % 50}",
+                    Gender = (i % 2 == 0 ? "Male" : "Female"),
+                    CountryCode = $"C{i % 50}",
+                    Fax = $"555-020{i % 10}",
+                    FaxNumber = $"555-030{i % 10}",
+                    PostalCode = $"PC{i % 1000}",
+                    Region = $"Region {i % 20}",
+                    Address = $"Address {i}",
                     Orders = new List<Order>
                     {
                         new Order
