@@ -229,7 +229,7 @@ namespace EfPerfBench.Benchmarks
                 .ToListAsync();
         }
 
-        [Benchmark(Baseline =true)]
+        [Benchmark]
         public async Task Ef_EagerLoading_ImplicitIncludes()
         {
             using var db = new AppDbContext(_options);
@@ -245,5 +245,33 @@ namespace EfPerfBench.Benchmarks
 
                 }).ToListAsync();
         }
+
+        [Benchmark]
+        public async Task Get_Customers_NoTracking_SingleQuery()
+        {
+            var methodName = GetMethodName();
+            using var db = new AppDbContext(_options);
+            var data = await db.Customers
+                .TagWith(methodName)
+                .AsNoTracking()
+                .Include(c => c.Orders)
+                .ThenInclude(o => o.Products)
+                .ToListAsync();
+        }
+
+        [Benchmark(Baseline =true)]
+        public async Task Get_Customers_NoTracking_SplitQuery()
+        {
+            var methodName = GetMethodName();
+            using var db = new AppDbContext(_options);
+            var data = await db.Customers
+                .TagWith(methodName)
+                .AsNoTracking()
+                .AsSplitQuery()
+                .Include(c => c.Orders)
+                .ThenInclude(o => o.Products)
+                .ToListAsync();
+        }
+
     }
 }
